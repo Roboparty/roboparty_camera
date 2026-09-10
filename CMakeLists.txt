@@ -21,6 +21,16 @@ find_package(std_srvs REQUIRED)
 find_package(OpenCV REQUIRED)
 
 add_subdirectory(thirdparty)
+if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h" OR
+   NOT EXISTS "${ONNXRUNTIME_LIB_FILE}")
+  find_package(onnxruntime CONFIG QUIET)
+  if(onnxruntime_FOUND)
+    set(ONNXRUNTIME_INCLUDE_DIR "")
+    set(ONNXRUNTIME_LIB_FILE onnxruntime::onnxruntime)
+  else()
+    message(FATAL_ERROR "ONNX Runtime was not found in thirdparty or the installation prefix")
+  endif()
+endif()
 
 add_executable(depth_node
   src/depth_node.cpp

@@ -59,9 +59,18 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ccache dpkg-dev debhelper devscripts \
-            git wget pkg-config libopencv-dev \
+            git wget gh pkg-config libopencv-dev \
             ros-jazzy-ament-cmake ros-jazzy-rclcpp \
             ros-jazzy-std-msgs ros-jazzy-sensor-msgs ros-jazzy-std-srvs
+
+      - name: Install RoboParty ONNX Runtime
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p debs
+          gh release download --repo Roboparty/roboparty_onnxruntime \
+            --pattern "*${{ matrix.arch }}.deb" --dir debs
+          sudo apt-get install -y ./debs/*.deb
 
       - name: Build deb package
         run: |

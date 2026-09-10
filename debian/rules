@@ -21,4 +21,4 @@ override_dh_install:
 	find debian/roboparty-camera/opt/roboparty/share/roboparty_camera -type f \( -name "*.onnx" -o -name "*.yaml" \) -exec chmod 644 {} \; 2>/dev/null || true
 
 override_dh_shlibdeps:
-	dh_shlibdeps -- -l$(CURDIR)/thirdparty/onnxruntime/lib --ignore-missing-info
+	dh_shlibdeps -- -l/opt/roboparty/lib --ignore-missing-info
