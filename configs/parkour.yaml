@@ -14,7 +14,6 @@ depth_node:
         intra_threads: 1
         debug_vis: true
         debug_depth_vis_topic: "/debug_depth_vis"
-        depth_use_bilinear: true
         depth_input_width: 480
         depth_input_height: 270
         depth_width: 64
@@ -25,3 +24,8 @@ depth_node:
         depth_crop_right: 16
         depth_min_distance: 0.0
         depth_max_distance: 2.5
+        # Fill invalid/too-close pixels after crop, then smooth the encoder input.
+        depth_inpaint_distance: 0.2
+        depth_inpaint_radius: 3.0
+        depth_gaussian_kernel_size: 3
+        depth_gaussian_sigma: 1.0

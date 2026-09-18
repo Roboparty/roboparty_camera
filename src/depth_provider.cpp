@@ -5,6 +5,7 @@
 
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
+#include <opencv2/photo.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
@@ -100,6 +101,10 @@ class DepthProvider::Impl {
         RCLCPP_INFO(node_.get_logger(), "depth_topic: %s", depth_topic_.c_str());
         RCLCPP_INFO(node_.get_logger(), "depth_encoder_model_path: %s", depth_encoder_model_path_.c_str());
         RCLCPP_INFO(node_.get_logger(), "depth output dim: %d", output_dim());
+        RCLCPP_INFO(node_.get_logger(),
+                    "depth crop inpaint: distance=%.3f m radius=%.1f, gaussian: ksize=%d sigma=%.3f",
+                    depth_inpaint_distance_, depth_inpaint_radius_,
+                    depth_gaussian_kernel_size_, depth_gaussian_sigma_);
         RCLCPP_INFO(node_.get_logger(), "depth history/encode ready (pulled by depth_node)");
     }
 
@@ -126,9 +131,12 @@ class DepthProvider::Impl {
         declare_if_needed("depth_crop_right", 16);
         declare_if_needed("depth_history_taps",
                           std::vector<int64_t>{35, 30, 25, 20, 15, 10, 5, 0});
-        declare_if_needed("depth_use_bilinear", true);
         declare_if_needed("depth_min_distance", 0.0f);
         declare_if_needed("depth_max_distance", 2.5f);
+        declare_if_needed("depth_inpaint_distance", 0.2f);
+        declare_if_needed("depth_inpaint_radius", 3.0);
+        declare_if_needed("depth_gaussian_kernel_size", 3);
+        declare_if_needed("depth_gaussian_sigma", 1.0);
         declare_if_needed("model_dir", std::string(""));
 
         node_.get_parameter("depth_topic", depth_topic_);
@@ -147,9 +155,12 @@ class DepthProvider::Impl {
         node_.get_parameter("depth_crop_left", depth_crop_left_);
         node_.get_parameter("depth_crop_right", depth_crop_right_);
         node_.get_parameter("depth_history_taps", depth_history_taps_);
-        node_.get_parameter("depth_use_bilinear", depth_use_bilinear_);
         node_.get_parameter("depth_min_distance", depth_min_distance_);
         node_.get_parameter("depth_max_distance", depth_max_distance_);
+        node_.get_parameter("depth_inpaint_distance", depth_inpaint_distance_);
+        node_.get_parameter("depth_inpaint_radius", depth_inpaint_radius_);
+        node_.get_parameter("depth_gaussian_kernel_size", depth_gaussian_kernel_size_);
+        node_.get_parameter("depth_gaussian_sigma", depth_gaussian_sigma_);
 
         depth_obs_width_ = depth_width_ - depth_crop_left_ - depth_crop_right_;
         depth_obs_height_ = depth_height_ - depth_crop_up_ - depth_crop_down_;
@@ -173,6 +184,19 @@ class DepthProvider::Impl {
         }
         if (depth_max_distance_ <= depth_min_distance_) {
             throw std::runtime_error("depth_max_distance must be greater than depth_min_distance");
+        }
+        if (depth_inpaint_distance_ < 0.0f) {
+            throw std::runtime_error("depth_inpaint_distance must be non-negative");
+        }
+        if (depth_inpaint_radius_ < 0.0) {
+            throw std::runtime_error("depth_inpaint_radius must be non-negative");
+        }
+        if (depth_gaussian_kernel_size_ != 0 &&
+            (depth_gaussian_kernel_size_ < 3 || depth_gaussian_kernel_size_ % 2 == 0)) {
+            throw std::runtime_error("depth_gaussian_kernel_size must be 0 or an odd integer >= 3");
+        }
+        if (depth_gaussian_sigma_ < 0.0) {
+            throw std::runtime_error("depth_gaussian_sigma must be non-negative");
         }
         if (use_depth_encoder_ && depth_encoder_output_dim_ <= 0) {
             throw std::runtime_error("depth_encoder_output_dim must be positive when use_depth_encoder is true");
@@ -255,8 +279,7 @@ class DepthProvider::Impl {
     }
 
     // Convert ROS depth image to meters (CV_32F). Invalid / non-positive -> 0.
-    // Valid pixels are clamped to [depth_min_distance_, depth_max_distance_].
-    // No per-pixel C++ loops and no inpaint.
+    // Range clipping happens after inpainting and Gaussian blur during normalization.
     cv::Mat depth_image_to_meters(const sensor_msgs::msg::Image& msg, bool is_u16) const {
         const int src_w = static_cast<int>(msg.width);
         const int src_h = static_cast<int>(msg.height);
@@ -268,18 +291,17 @@ class DepthProvider::Impl {
             depth_mm.convertTo(depth_m, CV_32F, 0.001);  // mm -> m; 0 stays 0
         } else {
             const cv::Mat depth_f(src_h, src_w, CV_32FC1,
-                                 const_cast<uint8_t*>(msg.data.data()), msg.step);
+                                  const_cast<uint8_t*>(msg.data.data()), msg.step);
             depth_f.convertTo(depth_m, CV_32F);  // clone into owned buffer
             cv::patchNaNs(depth_m, 0.0);
         }
 
-        // Treat non-positive as invalid holes (keep as 0); clamp only valid samples.
-        cv::Mat positive_mask = depth_m > 0.0f;
-        cv::Mat clamped;
-        cv::min(depth_m, depth_max_distance_, clamped);
-        cv::max(clamped, depth_min_distance_, clamped);
-        depth_m.setTo(0.0f);
-        clamped.copyTo(depth_m, positive_mask);
+        cv::Mat invalid_mask;
+        cv::compare(depth_m, 0.0f, invalid_mask, cv::CMP_LE);
+        cv::Mat infinity_mask;
+        cv::compare(depth_m, std::numeric_limits<float>::max(), infinity_mask, cv::CMP_GT);
+        cv::bitwise_or(invalid_mask, infinity_mask, invalid_mask);
+        depth_m.setTo(0.0f, invalid_mask);
         return depth_m;
     }
 
@@ -298,6 +320,29 @@ class DepthProvider::Impl {
         }
         const float* ptr = normalized.ptr<float>(0);
         return std::vector<float>(ptr, ptr + static_cast<size_t>(normalized.rows * normalized.cols));
+    }
+
+    // Match the deployed parkour preprocessing: fill invalid/too-close pixels,
+    // then smooth the cropped metric depth image before normalization.
+    void inpaint_and_blur(cv::Mat& depth_m) const {
+        if (depth_m.empty() || depth_m.type() != CV_32F) {
+            return;
+        }
+        if (depth_inpaint_radius_ > 0.0) {
+            cv::Mat hole_mask;
+            cv::compare(depth_m, depth_inpaint_distance_, hole_mask, cv::CMP_LT);
+            const int hole_count = cv::countNonZero(hole_mask);
+            if (hole_count > 0 && hole_count < static_cast<int>(depth_m.total())) {
+                cv::Mat inpainted;
+                cv::inpaint(depth_m, hole_mask, inpainted, depth_inpaint_radius_, cv::INPAINT_NS);
+                depth_m = inpainted;
+            }
+        }
+        if (depth_gaussian_kernel_size_ >= 3) {
+            cv::GaussianBlur(depth_m, depth_m,
+                             cv::Size(depth_gaussian_kernel_size_, depth_gaussian_kernel_size_),
+                             depth_gaussian_sigma_, depth_gaussian_sigma_);
+        }
     }
 
     // ---- Preprocess ----
@@ -332,8 +377,8 @@ class DepthProvider::Impl {
         const cv::Mat depth_m = depth_image_to_meters(msg, is_u16);
 
         cv::Mat grid_m;
-        cv::resize(depth_m, grid_m, cv::Size(depth_width_, depth_height_), 0, 0,
-                   depth_use_bilinear_ ? cv::INTER_LINEAR : cv::INTER_AREA);
+        // Match the instinct_onboard ParkourAgent depth preprocessing.
+        cv::resize(depth_m, grid_m, cv::Size(depth_width_, depth_height_), 0, 0, cv::INTER_NEAREST);
 
         // Downsample debug: publish meters (no full-grid normalization).
         publish_debug_image(grid_m, msg, debug_downsample_publisher_);
@@ -347,7 +392,8 @@ class DepthProvider::Impl {
             return {};
         }
 
-        const cv::Mat cropped_m = grid_m(crop_rect);
+        cv::Mat cropped_m = grid_m(crop_rect).clone();
+        inpaint_and_blur(cropped_m);
         // Encoder path always needs crop normalization to [0, 1].
         std::vector<float> output = normalized_from_depth_m(cropped_m);
         publish_debug_image(output, depth_obs_width_, depth_obs_height_, msg, debug_crop_publisher_);
@@ -490,9 +536,12 @@ class DepthProvider::Impl {
     int depth_obs_height_ = 0;
     std::vector<int64_t> depth_history_taps_{35, 30, 25, 20, 15, 10, 5, 0};
     int depth_obs_num_ = 0;
-    bool depth_use_bilinear_ = true;
     float depth_min_distance_ = 0.0f;
     float depth_max_distance_ = 2.5f;
+    float depth_inpaint_distance_ = 0.2f;
+    double depth_inpaint_radius_ = 3.0;
+    int depth_gaussian_kernel_size_ = 3;
+    double depth_gaussian_sigma_ = 1.0;
 
     Ort::AllocatorWithDefaultOptions allocator_;
     ModelContext encoder_ctx_;
