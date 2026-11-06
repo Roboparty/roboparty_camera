@@ -41,6 +41,9 @@ target_link_libraries(depth_node
 )
 ament_target_dependencies(depth_node PUBLIC rclcpp std_msgs sensor_msgs std_srvs)
 set_target_properties(depth_node PROPERTIES LINK_FLAGS "-Wl,--no-as-needed")
+if(ONNXRUNTIME_BUNDLED)
+  set_target_properties(depth_node PROPERTIES INSTALL_RPATH "$ORIGIN/onnxruntime")
+endif()
 
 install(TARGETS depth_node
   RUNTIME DESTINATION lib/${PROJECT_NAME})

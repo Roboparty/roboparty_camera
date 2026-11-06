@@ -19,6 +19,8 @@ override_dh_auto_configure:
 override_dh_install:
 	dh_install
 	find debian/roboparty-camera/opt/roboparty/share/roboparty_camera -type f \( -name "*.onnx" -o -name "*.yaml" \) -exec chmod 644 {} \; 2>/dev/null || true
+	# Debian packages use the separately managed roboparty-onnxruntime package.
+	rm -rf debian/roboparty-camera/opt/roboparty/lib/roboparty_camera/onnxruntime
 
 override_dh_shlibdeps:
-	dh_shlibdeps -- -l$(CURDIR)/thirdparty/onnxruntime/lib --ignore-missing-info
+	dh_shlibdeps -- $(foreach dir,$(wildcard $(CURDIR)/obj-*/thirdparty/onnxruntime-bundled/onnxruntime-linux-*-1.21.0/lib),-l$(dir)) -l/opt/roboparty/lib --ignore-missing-info

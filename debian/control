@@ -7,7 +7,8 @@ Build-Depends: debhelper-compat (= 12), cmake, pkg-config, ccache,
 
 Package: roboparty-camera
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, roboparty-base (>= 1.0.0)
+Depends: ${shlibs:Depends}, ${misc:Depends}, roboparty-base (>= 1.0.0),
+         roboparty-onnxruntime (>= 1.21.0)
 Description: RoboParty depth camera node
  ROS 2 depth processing node with ONNX Runtime encoder for RealSense D435i.
  Publishes encoded depth observations and ships launch/config/model assets.
