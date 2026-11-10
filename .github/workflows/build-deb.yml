@@ -3,6 +3,9 @@ name: Build RoboParty Camera Deb Package
 on:
   push:
 
+env:
+  ROS_DISTRO: ${{ vars.ROS_DISTRO || 'jazzy' }}
+
 jobs:
   build:
     strategy:
@@ -48,11 +51,11 @@ jobs:
 
           echo "✅ Tag matches changelog: v$TAG_VERSION"
 
-      - name: Setup ROS 2 Jazzy
+      - name: Setup ROS 2
         if: matrix.arch == 'amd64'
         uses: ros-tooling/setup-ros@v0.7
         with:
-          required-ros-distributions: jazzy
+          required-ros-distributions: ${{ vars.ROS_DISTRO || 'jazzy' }}
 
       - name: Install build dependencies
         run: |
@@ -60,12 +63,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ccache dpkg-dev debhelper devscripts \
             git wget pkg-config libopencv-dev \
-            ros-jazzy-ament-cmake ros-jazzy-rclcpp \
-            ros-jazzy-std-msgs ros-jazzy-sensor-msgs ros-jazzy-std-srvs
+            ros-${ROS_DISTRO}-ament-cmake ros-${ROS_DISTRO}-rclcpp \
+            ros-${ROS_DISTRO}-std-msgs ros-${ROS_DISTRO}-sensor-msgs ros-${ROS_DISTRO}-std-srvs
 
       - name: Build deb package
         run: |
-          . /opt/ros/jazzy/setup.sh
+          . /opt/ros/${ROS_DISTRO}/setup.sh
           dpkg-buildpackage -us -uc -b
           mv ../*.deb .
           VERSION=$(dpkg-parsechangelog -S Version | cut -d'-' -f1 || echo "unknown")
