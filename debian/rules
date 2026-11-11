@@ -1,10 +1,17 @@
 #!/usr/bin/make -f
+
+INSTALL_PREFIX ?= /opt/roboparty
+ROS_DISTRO ?= jazzy
+ROS_SETUP ?= /opt/ros/$(ROS_DISTRO)
+PYTHON_VERSION ?= 3.12
 export DH_VERBOSE = 1
 export DEB_BUILD_MAINT_OPTIONS = optimize=-lto
-export AMENT_PREFIX_PATH=/opt/ros/jazzy
-export CMAKE_PREFIX_PATH=/opt/roboparty:/opt/ros/jazzy
-export PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages:/opt/ros/jazzy/local/lib/python3.12/dist-packages
-export LD_LIBRARY_PATH := /opt/ros/jazzy/lib:$(LD_LIBRARY_PATH)
+export ROS_DISTRO
+export ROS_SETUP
+export AMENT_PREFIX_PATH = $(ROS_SETUP)
+export CMAKE_PREFIX_PATH = $(INSTALL_PREFIX):$(ROS_SETUP)
+export PYTHONPATH = $(ROS_SETUP)/lib/python$(PYTHON_VERSION)/site-packages:$(ROS_SETUP)/local/lib/python$(PYTHON_VERSION)/dist-packages
+export LD_LIBRARY_PATH := $(ROS_SETUP)/lib$(if $(LD_LIBRARY_PATH),:$(LD_LIBRARY_PATH))
 export CCACHE_DISABLE = 1
 
 %:
@@ -12,15 +19,15 @@ export CCACHE_DISABLE = 1
 
 override_dh_auto_configure:
 	dh_auto_configure -- \
-		-DCMAKE_INSTALL_PREFIX=/opt/roboparty \
-		-DCMAKE_PREFIX_PATH="/opt/roboparty;/opt/ros/jazzy" \
+		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
+		-DCMAKE_PREFIX_PATH="$(INSTALL_PREFIX);$(ROS_SETUP)" \
 		-DCMAKE_BUILD_TYPE=Release
 
 override_dh_install:
 	dh_install
-	find debian/roboparty-camera/opt/roboparty/share/roboparty_camera -type f \( -name "*.onnx" -o -name "*.yaml" \) -exec chmod 644 {} \; 2>/dev/null || true
+	find debian/roboparty-camera$(INSTALL_PREFIX)/share/roboparty_camera -type f \( -name "*.onnx" -o -name "*.yaml" \) -exec chmod 644 {} \; 2>/dev/null || true
 	# Debian packages use the separately managed roboparty-onnxruntime package.
-	rm -rf debian/roboparty-camera/opt/roboparty/lib/roboparty_camera/onnxruntime
+	rm -rf debian/roboparty-camera$(INSTALL_PREFIX)/lib/roboparty_camera/onnxruntime
 
 override_dh_shlibdeps:
-	dh_shlibdeps -- $(foreach dir,$(wildcard $(CURDIR)/obj-*/thirdparty/onnxruntime-bundled/onnxruntime-linux-*-1.21.0/lib),-l$(dir)) -l/opt/roboparty/lib --ignore-missing-info
+	dh_shlibdeps -- $(foreach dir,$(wildcard $(CURDIR)/obj-*/thirdparty/onnxruntime-bundled/onnxruntime-linux-*-1.21.0/lib),-l$(dir)) -l$(INSTALL_PREFIX)/lib --ignore-missing-info
